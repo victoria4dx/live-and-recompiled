@@ -1008,6 +1008,10 @@ void Draw(double fps) {
                 ImGui::SeparatorText("Post-processing");
                 ImGui::Checkbox("Vignette", &vignette::g_on);
                 Hint("The game's darkened screen edges. The red flash when you're hurt stays either way.", true);
+                ImGui::Checkbox("Fog", &s.fog);
+                Hint("The game's distance fog. Off shows the whole level clearly, to the edge of what the game draws.", true);
+                ImGui::Checkbox("Depth of field", &s.depth_of_field);
+                Hint("The game's blur on what is out of focus, near and far. Off keeps the whole picture sharp.", true);
                 ImGui::Checkbox("SMAA", &s.smaa);
                 Slider("Film grain %", &s.film_grain, 0, 100, app::Settings{}.film_grain);
                 Slider("Chromatic aberration %", &s.chromatic_aberration, 0, 100, app::Settings{}.chromatic_aberration);

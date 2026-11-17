@@ -212,7 +212,7 @@ inline const ShaderHooks* g_shader_hooks = nullptr;
 struct DrawConstants {
     float surf[4];      // target width, height, 1 / depth scale, 0
     float fog[4];       // start, end, density, mode
-    float fog_color[4];
+    float fog_color[4]; // r g b, then 0, or 2 + the fog factor every pixel of the draw takes (FillFogOff)
     float misc[4];      // alpha ref, alpha func, shadow func, specular
     float pc[18][4];    // combiner c0 c1 per stage, then final c0 c1
     float tfactor[4];

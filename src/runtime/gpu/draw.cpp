@@ -406,11 +406,35 @@ void FillFogConstants(const State& s, bool vertex_program, DrawConstants& c) {
     c.fog[3] = float(s.rs[kRsFogTableMode]);
 }
 
+// A fogged draw with its fog factor held where the colour comes out as it went in. Which end that is depends on the
+// final combiner, rgb = D + A * B + (1 - A) * C: the library's (and the fixed function's, and a shader's without one)
+// is fog alpha * R0 + (1 - fog alpha) * fog colour, unfogged at 1, and Conker's own is the other way round, fog
+// alpha * fog colour + (1 - fog alpha) * R0, unfogged at 0. A final combiner that takes the fog some other way
+// (its alpha between two colours neither of which is the fog's, or the fog colour alone) keeps its fog: that is no
+// distance fog to leave out. So does a draw the title draws without fog.
+void FillFogOff(const State& s, DrawConstants& c) {
+    if (c.fog[3] == 0) return;  // no fog on this draw
+    constexpr float kHeld = 2.0f;  // PixelHlsl's fogin
+    uint32_t abcd = s.ps ? SimpleState(s, kMPsFinalAbcd) : 0;
+    if (!abcd && !(s.ps && SimpleState(s, kMPsFinalEfgh))) {
+        c.fog_color[3] = kHeld + 1.0f;
+        return;
+    }
+    // PS_COMBINERINPUTS: the register in bits 0 to 3 (3 the fog), bit 4 its alpha, bits 5 to 7 the mapping
+    constexpr uint32_t kFog = 3, kAlpha = 0x10, kInvert = 0x20;
+    uint32_t a = abcd >> 24, b = (abcd >> 16) & 0xFF, cc = (abcd >> 8) & 0xFF;
+    auto colour = [&](uint32_t in) { return (in & 0xF) == kFog && !(in & kAlpha); };
+    if ((a & 0xF) != kFog || !(a & kAlpha) || (a & 0xE0 & ~kInvert) || colour(b) == colour(cc)) return;
+    float unfogged = colour(cc) ? 1.0f : 0.0f;  // A where the colour that isn't the fog's is all there is
+    c.fog_color[3] = kHeld + ((a & kInvert) ? 1.0f - unfogged : unfogged);
+}
+
 void FillSurfaceConstants(const State& s, GuestExtent size, DrawConstants& c) {
     c.surf[0] = float(size.w);
     c.surf[1] = float(size.h);
     c.surf[2] = 1.0f / s.zscale;
     Color(s.rs[kRsFogColor], c.fog_color);
+    c.fog_color[3] = 0;  // no shader reads a fog colour's alpha: the place is FillFogOff's
     c.misc[0] = float(SimpleState(s, kMAlphaRef) & 0xFF);
     c.misc[1] = SimpleState(s, kMAlphaTestEnable) ? float(CmpIndex(SimpleState(s, kMAlphaFunc))) : kAlphaTestAlways;
     c.misc[2] = float(CmpIndex(s.rs[kRsShadowFunc]));

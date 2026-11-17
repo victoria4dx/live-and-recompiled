@@ -3536,6 +3536,7 @@ void VulkanBackend::UploadConstants(const State& s, const DrawShaders& sh, const
         FillPointConstants(s, sh.prog, &s == &sprite_, c);
     }
     FillFogConstants(s, sh.prog, c);
+    if (!app::Get().fog) FillFogOff(s, c);
     FillCombinerConstants(s, c);
     FillTextureConstants(s, stages.rt, stages.exact, stages.k, stages.wide, c);
     if (sh.fixed_transform) {
@@ -4329,6 +4330,13 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     PixelKey pk = MakePixelKey(s, stages.info);
     pk.quad = sh.quad;
     pk.shading = sh.shading;
+    // app::Settings::depth_of_field off: the title's depth of field ends in one pass over the frame, the blurred
+    // copy blended in by a focus mask it works out from the depth buffer's bytes on stage 0 (the draw DepthSpread
+    // is for). Left out, the frame stays as sharp as it was drawn; the copies it shrank before are never shown.
+    // Only a blended screen pass: one that wrote the picture whole would leave nothing in its place.
+    if (!app::Get().depth_of_field && pk.programmable && !pk.shading && (pk.tex[0].flags & kTexDepthBytes) &&
+        (pk.tex_modes & 0x1F) == 1 && s.simple[kMBlendEnable >> 2] && ScreenSpaceDraw(s, a))
+        return CountedSkip(s, "depth of field off");
     sh.pkey = Hash(&pk, sizeof(pk));
     EnsurePixelShader(pk, sh);
     if (!sh.vs_code || !sh.ps_code) return CountedSkip(s, "shaders");

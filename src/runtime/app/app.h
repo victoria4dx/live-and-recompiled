@@ -33,6 +33,10 @@ struct Settings {
     // ambient occlusion from the depth buffer, first: its strength in % (0 off) and its reach in the title's units
     uint32_t ambient_occlusion = 0;
     uint32_t ambient_occlusion_radius = 30;
+    // the title's own effects, on as it draws them: off, its fog is left out of every draw (gpu::FillFogOff) and its
+    // depth of field's blur is never laid over the picture (the renderer skips the composite); read on each draw
+    bool fog = true;
+    bool depth_of_field = true;
     uint32_t volume = 100;           // the game's sound in %, the mixer's output scaled by its square
     std::string audio_device;         // an audio::Device id, "" the system default
     // the output's speakers: "auto" (5.1 when the device has six channels or more, else stereo), "stereo" or "5.1"

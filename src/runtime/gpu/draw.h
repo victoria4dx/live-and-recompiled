@@ -331,6 +331,8 @@ void KeyRasterizer(const State& s, const Assembled& a, PsoKey& k);
 constexpr float kAlphaTestAlways = 7.0f;
 
 void FillFogConstants(const State& s, bool vertex_program, DrawConstants& c);
+// the draw without its fog (app::Settings::fog off): after FillSurfaceConstants and FillFogConstants
+void FillFogOff(const State& s, DrawConstants& c);
 void FillSurfaceConstants(const State& s, GuestExtent size, DrawConstants& c);
 // stage0: the sprite's coordinates go to stage 0 (FixedSprite), else to stage 3
 void FillPointConstants(const State& s, bool vertex_program, bool stage0, DrawConstants& c);
