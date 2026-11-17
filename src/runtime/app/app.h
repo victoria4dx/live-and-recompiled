@@ -37,6 +37,13 @@ struct Settings {
     // depth of field's blur is never laid over the picture (the renderer skips the composite); read on each draw
     bool fog = true;
     bool depth_of_field = true;
+    // HDR output, when the display and the driver offer it (HDR10, else scRGB): the picture is the title's own 8 bit
+    // one, shown at hdr_paper_white nits for its white, its brightest parts raised towards hdr_peak nits by
+    // hdr_highlights % (0: none, the SDR picture as it is). The overlay stays at paper white. Read each frame.
+    bool hdr = false;
+    uint32_t hdr_paper_white = 200;
+    uint32_t hdr_peak = 1000;
+    uint32_t hdr_highlights = 50;
     uint32_t volume = 100;           // the game's sound in %, the mixer's output scaled by its square
     std::string audio_device;         // an audio::Device id, "" the system default
     // the output's speakers: "auto" (5.1 when the device has six channels or more, else stereo), "stereo" or "5.1"

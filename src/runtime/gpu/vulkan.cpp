@@ -151,6 +151,46 @@ float4 psmain(O i) : SV_Target {
 }
 )";
 
+// The picture and the overlay onto a swap chain that isn't the 8 bit one both were drawn for (DrawFrame). t0 is the
+// frame as SDR shows it (the picture in its letterbox, through the gamma ramp), t1 the overlay over nothing, colour
+// times alpha. b1: mode (0 SDR as it is, 1 HDR10: BT.2020 in PQ, 2 scRGB: linear BT.709, 1 = 80 nits), paper white
+// and peak in nits, the highlights' strength 0 to 1.
+// The picture is decoded as the 2.2 gamma a TV gave the console, 1 its paper white. Its brightest parts are then
+// raised towards the peak: by the largest channel, so a saturated light rises as a white one does, cubed, so the
+// mid tones stay where they are (half signal gains 1%, 80% a fifth of the way, full white reaches the peak).
+// Colours keep their ratios. The overlay goes over that at paper white, unraised.
+const char* kHdrHlsl = R"(
+cbuffer B : register(b1) { float4 opts; };
+Texture2D frame : register(t0);
+Texture2D ui : register(t1);
+struct O { float4 p : SV_Position; float2 uv : TEXCOORD0; };
+O vs(uint id : SV_VertexID) {
+    O o;
+    o.uv = float2((id << 1) & 2, id & 2);
+    o.p = float4(o.uv * float2(2, -2) + float2(-1, 1), 0, 1);
+    return o;
+}
+float3 Pq(float3 nits) {
+    float3 y = pow(saturate(nits / 10000.0), 0.1593017578125);
+    return pow((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y), 78.84375);
+}
+float4 psmain(O i) : SV_Target {
+    int3 at = int3(i.p.xy, 0);
+    float3 game = saturate(frame.Load(at).rgb);
+    float4 over = saturate(ui.Load(at));
+    if (opts.x < 0.5) return float4(over.rgb + (1 - over.a) * game, 1);
+    float3 lin = pow(game, 2.2);
+    float top = max(lin.r, max(lin.g, lin.b));
+    lin *= 1 + opts.w * (max(opts.z / opts.y, 1) - 1) * top * top * top;
+    float3 over_lin = pow(saturate(over.rgb / max(over.a, 1e-4)), 2.2) * over.a;
+    float3 nits = (over_lin + (1 - over.a) * lin) * opts.y;
+    if (opts.x > 1.5) return float4(nits / 80.0, 1);
+    float3 wide = float3(dot(nits, float3(0.6274, 0.3293, 0.0433)), dot(nits, float3(0.0691, 0.9195, 0.0114)),
+                         dot(nits, float3(0.0164, 0.0880, 0.8956)));
+    return float4(Pq(wide), 1);
+}
+)";
+
 const char* kDepthHlsl = R"(
 Texture2D<float> img : register(t0);
 SamplerState ps : register(s1);
@@ -1080,7 +1120,8 @@ private:
     bool KeepPicture(const Surface& front, uint32_t slot);
     bool AcquireImage(uint32_t& bi, VkSemaphore acquired);
     void DrawFrame(VkImageView picture, uint32_t bi);
-    void BlitFrame(VkImageView src);
+    void BlitFrame(VkImageView src, VkFormat rtv);
+    bool EnsureLayers();
     void BuildUi();
     void DrawUi();
     void QueuePresent(uint32_t bi);
@@ -1185,6 +1226,17 @@ private:
     VkFormat shadow_fmt_ = VK_FORMAT_D32_SFLOAT;        // depth textures the title fills itself
     VkSwapchainKHR swap_ = VK_NULL_HANDLE;
     VkFormat swap_fmt_ = kBgra;
+    // HDR (app::Settings::hdr): the swap chain's gpu::kHdr10 or kHdrScRgb, kHdrOff an SDR one; whether the settings
+    // asked when it was made; and whether the instance has VK_EXT_swapchain_colorspace, without which a surface
+    // lists no HDR format
+    int swap_hdr_ = kHdrOff;
+    bool swap_hdr_asked_ = false;
+    bool colorspace_ext_ = false;
+    // the format the overlay's pipeline draws to, the SDR swap chain's as of CreateUi and fixed from then. A swap
+    // chain of another (an HDR one, or SDR again in a format that isn't it) is drawn by layers: the frame and the
+    // overlay each into an image of this format, the swap chain's size, then kHdrHlsl onto the swap chain image
+    VkFormat ui_fmt_ = kBgra;
+    ImageRef layers_[2];  // the frame, the overlay
     bool swap_vsync_ = true;
     uint32_t swap_gen_ = 1;    // the frame generation it has images for
     bool swap_stale_ = false;  // out of date or suboptimal: made again before the next frame
@@ -1489,6 +1541,7 @@ VulkanBackend::~VulkanBackend() {
     dummy_cube_.reset();
     dummy_depth_.reset();
     lut_.reset();
+    for (ImageRef& im : layers_) im.reset();
     for (auto& f : frames_) {
         f.garbage.clear();
         f.upload.reset();
@@ -1536,6 +1589,18 @@ bool VulkanBackend::CreateInstance() {
 #else
     std::vector<const char*> exts = app::VulkanExtensions();  // the SDL window's surface ones
 #endif
+    {
+        // a surface lists its HDR formats only with this
+        uint32_t n = 0;
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
+        std::vector<VkExtensionProperties> have(n);
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, have.data());
+        have.resize(n);
+        colorspace_ext_ = std::any_of(have.begin(), have.end(), [](const VkExtensionProperties& e) {
+            return !std::strcmp(e.extensionName, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+        });
+        if (colorspace_ext_) exts.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+    }
     bool debug = std::getenv("XBE_VULKAN_DEBUG") != nullptr;
     const char* validation = "VK_LAYER_KHRONOS_validation";
     if (debug) exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -1782,6 +1847,36 @@ bool VulkanBackend::CreateSwapChain() {
             break;
         }
     }
+    // HDR when the settings ask and the surface offers it (on Windows: while the display's HDR is on): HDR10 first,
+    // 10 bits a channel being enough for it, else scRGB
+    swap_hdr_asked_ = app::Get().hdr;
+    swap_hdr_ = kHdrOff;
+    if (swap_hdr_asked_) {
+        struct Choice {
+            VkFormat format;
+            VkColorSpaceKHR space;
+            int hdr;
+        };
+        const Choice choices[] = {
+            {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT, kHdr10},
+            {VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT, kHdr10},
+            {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT, kHdrScRgb},
+        };
+        for (const Choice& c : choices) {
+            auto it = std::find_if(formats.begin(), formats.end(), [&](const VkSurfaceFormatKHR& f) {
+                return f.format == c.format && f.colorSpace == c.space;
+            });
+            if (!colorspace_ext_ || it == formats.end()) continue;
+            fmt = *it;
+            swap_hdr_ = c.hdr;
+            break;
+        }
+    }
+    if (int state = swap_hdr_ ? swap_hdr_ : swap_hdr_asked_ ? kHdrNone : kHdrOff; g_hdr_state.exchange(state) != state)
+        LOGR("display: %s", state == kHdr10      ? "HDR10 output"
+                            : state == kHdrScRgb ? "scRGB HDR output"
+                            : state == kHdrNone  ? "HDR asked for, but the display or the driver doesn't offer it: SDR output"
+                                                 : "SDR output");
     vkGetPhysicalDeviceSurfacePresentModesKHR(phys_, surface_, &n, nullptr);
     std::vector<VkPresentModeKHR> modes(n);
     vkGetPhysicalDeviceSurfacePresentModesKHR(phys_, surface_, &n, modes.data());
@@ -1977,7 +2072,8 @@ bool VulkanBackend::InitUi() {
     ii.UseDynamicRendering = true;
     ii.PipelineInfoMain.PipelineRenderingCreateInfo = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     ii.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
-    ii.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &swap_fmt_;
+    ui_fmt_ = swap_hdr_ ? kBgra : swap_fmt_;  // an HDR swap chain is drawn by layers, see ui_fmt_
+    ii.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &ui_fmt_;
     ui_ = ImGui_ImplVulkan_Init(&ii);
     if (!ui_) LOGE("vulkan: the overlay could not start");
     return ui_;
@@ -4733,7 +4829,8 @@ void VulkanBackend::ResizeSwap() {
     if (minimised_) return;
     bool vsync = app::Get().vsync;
     uint32_t gen = std::clamp<uint32_t>(app::Get().frame_generation, 1, kMaxGen);
-    if (swap_ && !swap_stale_ && ext.width == bb_w_ && ext.height == bb_h_ && vsync == swap_vsync_ && gen == swap_gen_)
+    if (swap_ && !swap_stale_ && ext.width == bb_w_ && ext.height == bb_h_ && vsync == swap_vsync_ && gen == swap_gen_ &&
+        app::Get().hdr == swap_hdr_asked_)
         return;
     Flush();
     vkDeviceWaitIdle(dev_);
@@ -4843,7 +4940,7 @@ bool VulkanBackend::AcquireImage(uint32_t& bi, VkSemaphore acquired) {
     return true;
 }
 
-void VulkanBackend::BlitFrame(VkImageView src) {
+void VulkanBackend::BlitFrame(VkImageView src, VkFormat rtv) {
     // 16:9 when the console reports a widescreen display, else 4:3, or the shape a patched title draws
     float aspect = app::FrameAspect();
     float w = float(bb_w_);
@@ -4853,7 +4950,19 @@ void VulkanBackend::BlitFrame(VkImageView src) {
     float uv[4] = {0, 0, 1, 1};
     SetViewport((w - vw) / 2, (h - vh) / 2, vw, vh);
     SetScissor(0, 0, int32_t(bb_w_), int32_t(bb_h_));
-    Blit(src, uv, {.gamma = gamma_, .rtv = swap_fmt_});
+    Blit(src, uv, {.gamma = gamma_, .rtv = rtv});
+}
+
+// layers_ at the swap chain's size, for a swap chain the overlay's pipeline can't draw to; false without memory
+bool VulkanBackend::EnsureLayers() {
+    for (ImageRef& im : layers_) {
+        if (im && im->w == bb_w_ && im->h == bb_h_) continue;
+        if (im) Retire(std::move(im));
+        im = NewImage({.fmt = ui_fmt_, .w = bb_w_, .h = bb_h_,
+                       .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+        if (!im) return false;
+    }
+    return true;
 }
 
 // the overlay, once a frame: each of the frame's pictures draws it (DrawUi)
@@ -4882,6 +4991,30 @@ void VulkanBackend::DrawUi() {
 // a picture of the frame, readable (null: none), into the swap chain image bi, the overlay over it
 void VulkanBackend::DrawFrame(VkImageView picture, uint32_t bi) {
     Image& bb = *bb_[bi];
+    if ((swap_hdr_ || swap_fmt_ != ui_fmt_) && EnsureLayers()) {
+        // by layers: the frame as SDR shows it, the overlay over nothing, then both onto the swap chain image
+        for (int layer = 0; layer < 2; layer++) {
+            Image& im = *layers_[layer];
+            SetTargets(&im, nullptr);
+            bound_rt_ = bound_ds_ = nullptr;
+            EnsureRendering();
+            VkClearAttachment ca{VK_IMAGE_ASPECT_COLOR_BIT, 0};
+            ca.clearValue.color = {{0, 0, 0, layer ? 0.0f : 1.0f}};
+            VkClearRect cr{{{0, 0}, {im.w, im.h}}, 0, 1};
+            vkCmdClearAttachments(cmd_, 1, &ca, 1, &cr);
+            if (layer) DrawUi();
+            else if (picture) BlitFrame(picture, ui_fmt_);
+        }
+        Transition(*layers_[0], kRead);
+        Transition(*layers_[1], kRead);
+        const app::Settings& set = app::Get();
+        const float p[8] = {float(swap_hdr_), float(set.hdr_paper_white), float(set.hdr_peak),
+                            set.hdr_highlights / 100.0f};
+        const VkImageView src[3] = {layers_[0]->view, layers_[1]->view, VK_NULL_HANDLE};
+        Pass(kHdrHlsl, "psmain", swap_fmt_, bb, bb.w, bb.h, src, p, -1);
+        Transition(bb, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        return;
+    }
     SetTargets(&bb, nullptr);
     bound_rt_ = bound_ds_ = nullptr;
     EnsureRendering();
@@ -4889,7 +5022,7 @@ void VulkanBackend::DrawFrame(VkImageView picture, uint32_t bi) {
     ca.clearValue.color = {{0, 0, 0, 1}};
     VkClearRect cr{{{0, 0}, {bb.w, bb.h}}, 0, 1};
     vkCmdClearAttachments(cmd_, 1, &ca, 1, &cr);
-    if (picture) BlitFrame(picture);
+    if (picture) BlitFrame(picture, swap_fmt_);
     DrawUi();
     Transition(bb, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 }

@@ -1012,6 +1012,26 @@ void Draw(double fps) {
                 Hint("The game's distance fog. Off shows the whole level clearly, to the edge of what the game draws.", true);
                 ImGui::Checkbox("Depth of field", &s.depth_of_field);
                 Hint("The game's blur on what is out of focus, near and far. Off keeps the whole picture sharp.", true);
+
+                ImGui::SeparatorText("HDR");
+                ImGui::Checkbox("HDR output", &s.hdr);
+                {
+                    const int state = gpu::g_hdr_state.load();
+                    Hint(state == gpu::kHdr10      ? "On: HDR10."
+                         : state == gpu::kHdrScRgb ? "On: scRGB."
+                         : state == gpu::kHdrNone
+                             ? "Not available: turn HDR on for this display in the system's settings. Shown as SDR."
+                             : "For an HDR display, with HDR turned on in the system's settings.",
+                         true);
+                }
+                if (s.hdr) {
+                    Slider("Paper white (nits)", &s.hdr_paper_white, 80, 500, app::Settings{}.hdr_paper_white);
+                    Hint("How bright the game's white is. The picture's overall brightness.", true);
+                    Slider("Peak brightness (nits)", &s.hdr_peak, 400, 4000, app::Settings{}.hdr_peak);
+                    Hint("Your display's brightest. Highlights are raised up to it.", true);
+                    Slider("Highlights %", &s.hdr_highlights, 0, 100, app::Settings{}.hdr_highlights);
+                    Hint("How far the brightest parts rise above paper white towards the peak. 0 shows the picture as it is in SDR.", true);
+                }
                 ImGui::Checkbox("SMAA", &s.smaa);
                 Slider("Film grain %", &s.film_grain, 0, 100, app::Settings{}.film_grain);
                 Slider("Chromatic aberration %", &s.chromatic_aberration, 0, 100, app::Settings{}.chromatic_aberration);

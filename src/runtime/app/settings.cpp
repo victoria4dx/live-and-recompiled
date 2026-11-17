@@ -68,6 +68,10 @@ void Load() {
     s.ambient_occlusion_radius = t["ambient_occlusion_radius"].value_or(s.ambient_occlusion_radius);
     s.fog = t["fog"].value_or(s.fog);
     s.depth_of_field = t["depth_of_field"].value_or(s.depth_of_field);
+    s.hdr = t["hdr"].value_or(s.hdr);
+    s.hdr_paper_white = std::clamp<uint32_t>(t["hdr_paper_white"].value_or(s.hdr_paper_white), 80, 500);
+    s.hdr_peak = std::clamp<uint32_t>(t["hdr_peak"].value_or(s.hdr_peak), 400, 4000);
+    s.hdr_highlights = std::min<uint32_t>(t["hdr_highlights"].value_or(s.hdr_highlights), 100);
     s.volume = std::min<uint32_t>(t["volume"].value_or(s.volume), 100);
     s.audio_device = t["audio_device"].value_or(s.audio_device);
     s.speakers = t["speakers"].value_or(s.speakers);
@@ -117,6 +121,10 @@ toml::table Table() {
                   {"ambient_occlusion_radius", int64_t(s.ambient_occlusion_radius)},
                   {"fog", s.fog},
                   {"depth_of_field", s.depth_of_field},
+                  {"hdr", s.hdr},
+                  {"hdr_paper_white", int64_t(s.hdr_paper_white)},
+                  {"hdr_peak", int64_t(s.hdr_peak)},
+                  {"hdr_highlights", int64_t(s.hdr_highlights)},
                   {"volume", int64_t(s.volume)},
                   {"audio_device", s.audio_device},
                   {"speakers", s.speakers},

@@ -81,6 +81,10 @@ private:
 // its own file with a Create<Name>Backend here, and a line in CreateBackend (backend.cpp)
 // the GPUs the backend can draw with, named, as it found them at start (empty before); the settings' gpu names one
 std::vector<std::string>& Adapters();
+// how the picture is shown, for the settings menu: kHdrOff as SDR, kHdr10 or kHdrScRgb in HDR, kHdrNone when
+// app::Settings::hdr asks for HDR and the display or the driver doesn't offer it (it is shown as SDR)
+enum : int { kHdrOff = 0, kHdr10 = 1, kHdrScRgb = 2, kHdrNone = -1 };
+inline std::atomic<int> g_hdr_state{kHdrOff};
 std::unique_ptr<Backend> CreateBackend(uint32_t width, uint32_t height);
 std::unique_ptr<Backend> CreateVulkanBackend();
 // the same backend driven from a thread of its own: calls return once recorded
